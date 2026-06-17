@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  /* Space-separated RGB channels so Tailwind's /opacity modifiers work. */
+  --paper: 242 245 244; /* #F2F5F4 */
+  --ink: 30 52 52; /* #1E3434 */
+  --card: rgba(255, 255, 255, 0.6);
+  --card-solid: #ffffff;
+}
+
+.dark {
+  color-scheme: dark;
+  --paper: 13 21 26; /* #0D151A — page surface */
+  --ink: 233 238 237; /* #E9EEED — body text */
+  --card: rgba(255, 255, 255, 0.045);
+  --card-solid: #1b2d33;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: rgb(var(--paper));
+  color: rgb(var(--ink));
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+:focus-visible {
+  outline: 2px solid #ff8552;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
