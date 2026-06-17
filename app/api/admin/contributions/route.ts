@@ -17,10 +17,46 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
 
-  const limit = Number(new URL(req.url).searchParams.get("limit") ?? "50");
-  const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 50;
+  const params = new URL(req.url).searchParams;
+  const limit = Number(params.get("limit") ?? "100");
+  const safeLimit = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
 
-  const { rows } = await sql`
+  // Optional filters — build a parameterised WHERE clause for whatever is set.
+  const where: string[] = [];
+  const values: (string | number)[] = [];
+
+  const projectId = Number(params.get("projectId"));
+  if (Number.isInteger(projectId)) {
+    values.push(projectId);
+    where.push(`c.project_id = $${values.length}`);
+  }
+  const q = (params.get("q") ?? "").trim();
+  if (q) {
+    values.push(`%${q}%`);
+    where.push(`(u.name ILIKE $${values.length} OR u.phone ILIKE $${values.length})`);
+  }
+  const from = params.get("from");
+  if (from) {
+    values.push(from);
+    where.push(`c.date >= $${values.length}`);
+  }
+  const to = params.get("to");
+  if (to) {
+    values.push(to);
+    where.push(`c.date <= $${values.length}`);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  // Totals across the whole matching set (not just the page).
+  const totalsText = `
+    SELECT COALESCE(SUM(c.amount), 0)::text AS total, COUNT(*)::int AS count
+    FROM contributions c
+    JOIN users u ON u.id = c.user_id
+    ${whereSql}
+  `;
+  const totals = await sql.query(totalsText, values);
+
+  const listText = `
     SELECT
       c.id, c.amount::text AS amount, c.type, c.date, c.notes,
       c.project_id, p.name AS project_name,
@@ -28,11 +64,17 @@ export async function GET(req: Request) {
     FROM contributions c
     JOIN users u ON u.id = c.user_id
     LEFT JOIN projects p ON p.id = c.project_id
+    ${whereSql}
     ORDER BY c.date DESC, c.id DESC
-    LIMIT ${safeLimit}
+    LIMIT $${values.length + 1}
   `;
+  const list = await sql.query(listText, [...values, safeLimit]);
 
-  return NextResponse.json({ contributions: rows });
+  return NextResponse.json({
+    contributions: list.rows,
+    total: totals.rows[0]?.total ?? "0",
+    count: totals.rows[0]?.count ?? 0,
+  });
 }
 
 export async function POST(req: Request) {

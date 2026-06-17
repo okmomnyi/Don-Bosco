@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type MemberOption = { id: number; name: string; phone: string; active: boolean };
 type ProjectOption = { id: number; name: string; active: boolean };
@@ -54,6 +54,14 @@ export default function ContributionsManager({ today }: { today: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Filters (for tracking a specific payment)
+  const [filterQ, setFilterQ] = useState("");
+  const [filterProject, setFilterProject] = useState("");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [filteredTotal, setFilteredTotal] = useState("0");
+  const [filteredCount, setFilteredCount] = useState(0);
+
   // Form
   const [search, setSearch] = useState("");
   const [memberId, setMemberId] = useState<number | null>(null);
@@ -71,30 +79,69 @@ export default function ContributionsManager({ today }: { today: string }) {
   const [eDate, setEDate] = useState(today);
   const [eNotes, setENotes] = useState("");
 
-  async function load() {
-    setLoading(true);
+  // Members + projects load once (used by the form and the filter dropdown).
+  const loadOptions = useCallback(async () => {
     try {
-      const [mRes, pRes, cRes] = await Promise.all([
+      const [mRes, pRes] = await Promise.all([
         fetch("/api/admin/members"),
         fetch("/api/admin/projects"),
-        fetch("/api/admin/contributions?limit=100"),
       ]);
       const mData = await mRes.json();
       const pData = await pRes.json();
-      const cData = await cRes.json();
       setMembers((mData.members ?? []).filter((m: MemberOption) => m.active));
-      setProjects((pData.projects ?? []).filter((p: ProjectOption) => p.active));
-      setContributions(cData.contributions ?? []);
+      setProjects(pData.projects ?? []); // keep all (filter dropdown needs hidden ones too)
+    } catch {
+      setError("Couldn't load data.");
+    }
+  }, []);
+
+  // The contributions list re-fetches whenever a filter changes.
+  const loadContributions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (filterProject) qs.set("projectId", filterProject);
+      if (filterQ.trim()) qs.set("q", filterQ.trim());
+      if (filterFrom) qs.set("from", filterFrom);
+      if (filterTo) qs.set("to", filterTo);
+      const res = await fetch(`/api/admin/contributions?${qs.toString()}`);
+      const data = await res.json();
+      setContributions(data.contributions ?? []);
+      setFilteredTotal(data.total ?? "0");
+      setFilteredCount(data.count ?? 0);
     } catch {
       setError("Couldn't load data.");
     } finally {
       setLoading(false);
     }
-  }
+  }, [filterProject, filterQ, filterFrom, filterTo]);
 
   useEffect(() => {
-    load();
-  }, []);
+    loadOptions();
+  }, [loadOptions]);
+
+  // Debounce so typing in the member search doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      loadContributions();
+    }, 250);
+    return () => clearTimeout(t);
+  }, [loadContributions]);
+
+  const activeProjects = useMemo(
+    () => projects.filter((p) => p.active),
+    [projects]
+  );
+  const filtersActive = Boolean(
+    filterProject || filterQ.trim() || filterFrom || filterTo
+  );
+
+  function clearFilters() {
+    setFilterProject("");
+    setFilterQ("");
+    setFilterFrom("");
+    setFilterTo("");
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -138,7 +185,7 @@ export default function ContributionsManager({ today }: { today: string }) {
       setNotes("");
       setSearch("");
       setMemberId(null);
-      await load();
+      await loadContributions();
     } finally {
       setSaving(false);
     }
@@ -151,7 +198,7 @@ export default function ContributionsManager({ today }: { today: string }) {
       setError("Couldn't delete.");
       return;
     }
-    await load();
+    await loadContributions();
   }
 
   function startEdit(c: Contribution) {
@@ -181,10 +228,10 @@ export default function ContributionsManager({ today }: { today: string }) {
       return;
     }
     setEditingId(null);
-    await load();
+    await loadContributions();
   }
 
-  const noProjects = !loading && projects.length === 0;
+  const noProjects = activeProjects.length === 0;
 
   return (
     <div>
@@ -250,7 +297,7 @@ export default function ContributionsManager({ today }: { today: string }) {
             <label htmlFor="c-project" className={labelCls}>Project</label>
             <select id="c-project" className={`mt-2 ${inputCls}`} value={projectId} onChange={(e) => setProjectId(e.target.value)} required>
               <option value="" disabled>Choose a project…</option>
-              {projects.map((p) => (
+              {activeProjects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
@@ -274,12 +321,60 @@ export default function ContributionsManager({ today }: { today: string }) {
         </form>
       </div>
 
-      {/* Recent */}
-      <h2 className="mt-12 font-display text-2xl text-ink">Recent contributions</h2>
+      {/* Recent + filters */}
+      <div className="mt-12 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="font-display text-2xl text-ink">
+            {filtersActive ? "Filtered contributions" : "Recent contributions"}
+          </h2>
+          <p className="mt-1 font-mono text-xs text-ink/50">
+            {filteredCount} {filteredCount === 1 ? "entry" : "entries"} ·{" "}
+            {ksh(filteredTotal)} total
+          </p>
+        </div>
+        {filtersActive && (
+          <button
+            onClick={clearFilters}
+            className="rounded-full border border-ink/15 px-4 py-2 font-body text-xs text-ink/70 hover:text-ink"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Filter bar */}
+      <div className="mt-6 grid gap-4 rounded-3xl border border-ink/10 bg-card p-5 md:grid-cols-4">
+        <div>
+          <label htmlFor="f-q" className={labelCls}>Member</label>
+          <input id="f-q" className={`mt-2 ${inputCls}`} value={filterQ} onChange={(e) => setFilterQ(e.target.value)} placeholder="Name or phone" autoComplete="off" />
+        </div>
+        <div>
+          <label htmlFor="f-project" className={labelCls}>Project</label>
+          <select id="f-project" className={`mt-2 ${inputCls}`} value={filterProject} onChange={(e) => setFilterProject(e.target.value)}>
+            <option value="">All projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{!p.active ? " (hidden)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="f-from" className={labelCls}>From</label>
+          <input id="f-from" type="date" className={`mt-2 ${inputCls}`} value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="f-to" className={labelCls}>To</label>
+          <input id="f-to" type="date" className={`mt-2 ${inputCls}`} value={filterTo} onChange={(e) => setFilterTo(e.target.value)} />
+        </div>
+      </div>
+
       {loading ? (
         <p className="mt-6 font-body text-sm text-ink/60">Loading…</p>
       ) : contributions.length === 0 ? (
-        <p className="mt-6 font-body text-sm text-ink/60">Nothing recorded yet.</p>
+        <p className="mt-6 font-body text-sm text-ink/60">
+          {filtersActive ? "No contributions match these filters." : "Nothing recorded yet."}
+        </p>
       ) : (
         <ul className="mt-6 divide-y divide-ink/10 rounded-3xl border border-ink/10 bg-card">
           {contributions.map((c) => (
@@ -289,7 +384,7 @@ export default function ContributionsManager({ today }: { today: string }) {
                   <input type="number" min="0" step="0.01" className={inputCls} value={eAmount} onChange={(e) => setEAmount(e.target.value)} />
                   <select className={inputCls} value={eProjectId} onChange={(e) => setEProjectId(e.target.value)}>
                     <option value="" disabled>Project…</option>
-                    {projects.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                    {activeProjects.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                   </select>
                   <input type="date" className={inputCls} value={eDate} onChange={(e) => setEDate(e.target.value)} />
                   <input className={inputCls} value={eNotes} onChange={(e) => setENotes(e.target.value)} placeholder="Notes" />
