@@ -32,6 +32,7 @@ export type ContributionRow = {
   user_id: number;
   amount: string; // NUMERIC comes back as a string from pg
   type: "subscription" | "dominica" | "project" | "other";
+  project_id: number | null;
   date: string;
   recorded_by: number | null;
   notes: string | null;
@@ -44,3 +45,12 @@ export const CONTRIBUTION_TYPES = [
   "project",
   "other",
 ] as const;
+
+/** Shape of a row in the `projects` table. */
+export type ProjectRow = {
+  id: number;
+  name: string;
+  target_amount: string; // NUMERIC comes back as a string from pg
+  active: boolean;
+  created_at: string;
+};

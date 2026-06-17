@@ -94,3 +94,35 @@ export async function PATCH(
 
   return NextResponse.json({ member: rows[0] });
 }
+
+/**
+ * Permanently delete a member. Their contributions are removed too
+ * (contributions.user_id is ON DELETE CASCADE). Intended for cleaning up
+ * wrongly-created accounts — use Deactivate (PATCH) to keep history instead.
+ */
+export async function DELETE(
+  _req: Request,
+  { params }: { params: { id: string } }
+) {
+  const admin = await requireAdmin();
+  if (!admin) {
+    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+  }
+
+  const id = Number(params.id);
+  if (!Number.isInteger(id)) {
+    return NextResponse.json({ error: "Invalid member id." }, { status: 400 });
+  }
+  if (id === admin.id) {
+    return NextResponse.json(
+      { error: "You can't delete your own account." },
+      { status: 400 }
+    );
+  }
+
+  const { rowCount } = await sql`DELETE FROM users WHERE id = ${id}`;
+  if (rowCount === 0) {
+    return NextResponse.json({ error: "Member not found." }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true });
+}

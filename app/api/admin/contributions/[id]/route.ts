@@ -28,6 +28,7 @@ export async function PATCH(
   let body: {
     amount?: number | string;
     type?: string;
+    projectId?: number | string;
     date?: string;
     notes?: string;
   };
@@ -53,6 +54,13 @@ export async function PATCH(
     }
     await sql`UPDATE contributions SET type = ${body.type} WHERE id = ${id}`;
   }
+  if (body.projectId !== undefined) {
+    const projectId = Number(body.projectId);
+    if (!Number.isInteger(projectId)) {
+      return NextResponse.json({ error: "Invalid project." }, { status: 400 });
+    }
+    await sql`UPDATE contributions SET project_id = ${projectId} WHERE id = ${id}`;
+  }
   if (body.date !== undefined) {
     await sql`UPDATE contributions SET date = ${body.date} WHERE id = ${id}`;
   }
@@ -61,7 +69,7 @@ export async function PATCH(
   }
 
   const { rows } = await sql`
-    SELECT id, amount::text AS amount, type, date, notes FROM contributions WHERE id = ${id}
+    SELECT id, amount::text AS amount, type, project_id, date, notes FROM contributions WHERE id = ${id}
   `;
   if (rows.length === 0) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });

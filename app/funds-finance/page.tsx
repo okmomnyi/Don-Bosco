@@ -31,8 +31,41 @@ async function getFundsRaisedPercent(): Promise<number> {
   }
 }
 
+type ProjectProgress = { id: number; name: string; raised: number; target: number };
+
+/** Active projects with how much each has raised, for the per-project bars. */
+async function getProjectProgress(): Promise<ProjectProgress[]> {
+  try {
+    const { rows } = await sql`
+      SELECT p.id, p.name,
+             COALESCE(SUM(c.amount), 0)::float8 AS raised,
+             p.target_amount::float8 AS target
+      FROM projects p
+      LEFT JOIN contributions c ON c.project_id = p.id
+      WHERE p.active = true
+      GROUP BY p.id
+      ORDER BY p.name ASC
+    `;
+    return rows.map((r) => ({
+      id: r.id as number,
+      name: r.name as string,
+      raised: Number(r.raised),
+      target: Number(r.target),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function ksh(amount: number): string {
+  return `Ksh ${amount.toLocaleString("en-KE", { maximumFractionDigits: 0 })}`;
+}
+
 export default async function FundsFinancePage() {
-  const FUNDS_RAISED_PERCENT = await getFundsRaisedPercent();
+  const [FUNDS_RAISED_PERCENT, projects] = await Promise.all([
+    getFundsRaisedPercent(),
+    getProjectProgress(),
+  ]);
 
   return (
     <main className="px-6 py-16 md:py-24">
@@ -106,6 +139,52 @@ export default async function FundsFinancePage() {
             </div>
           </div>
         </div>
+
+        {/* Per-project progress */}
+        {projects.length > 0 && (
+          <div className="mt-20">
+            <h2 className="font-display text-2xl text-ink md:text-3xl">
+              By project
+            </h2>
+            <p className="mt-3 max-w-2xl font-body text-sm leading-relaxed text-ink/70">
+              Each effort the group is raising for, and how far along it is.
+            </p>
+
+            <div className="mt-8 grid gap-6 sm:grid-cols-2">
+              {projects.map((p) => {
+                const hasTarget = p.target > 0;
+                const percent = hasTarget
+                  ? Math.min(100, Math.round((p.raised / p.target) * 100))
+                  : 0;
+                return (
+                  <div
+                    key={p.id}
+                    className="rounded-4xl border border-ink/10 bg-card p-6"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-display text-xl text-ink">{p.name}</p>
+                      {hasTarget && (
+                        <p className="shrink-0 font-mono text-sm text-ink">
+                          {percent}%
+                        </p>
+                      )}
+                    </div>
+                    <p className="mt-2 font-mono text-sm text-ink/70">
+                      {ksh(p.raised)}
+                      {hasTarget ? ` of ${ksh(p.target)}` : " raised"}
+                    </p>
+                    <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-ink/10">
+                      <div
+                        className="h-full rounded-full bg-horizon"
+                        style={{ width: `${hasTarget ? percent : 0}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

@@ -34,11 +34,13 @@ export default async function DashboardPage() {
   if (!user) redirect("/portal");
   if (user.must_change_password) redirect("/portal/change-password");
 
-  const { rows } = await sql<ContributionRow>`
-    SELECT id, user_id, amount, type, date, recorded_by, notes, created_at
-    FROM contributions
-    WHERE user_id = ${user.id}
-    ORDER BY date DESC, id DESC
+  const { rows } = await sql<ContributionRow & { project_name: string | null }>`
+    SELECT c.id, c.user_id, c.amount, c.type, c.project_id, c.date,
+           c.recorded_by, c.notes, c.created_at, p.name AS project_name
+    FROM contributions c
+    LEFT JOIN projects p ON p.id = c.project_id
+    WHERE c.user_id = ${user.id}
+    ORDER BY c.date DESC, c.id DESC
   `;
 
   const total = rows.reduce((sum, r) => sum + Number(r.amount), 0);
@@ -108,7 +110,7 @@ export default async function DashboardPage() {
                       <SunMark className="mt-1.5 shrink-0" />
                       <div>
                         <p className="font-body text-sm font-medium text-ink">
-                          {TYPE_LABELS[r.type]}
+                          {r.project_name ?? TYPE_LABELS[r.type]}
                         </p>
                         <p className="font-mono text-xs text-ink/50">
                           {formatDate(r.date)}

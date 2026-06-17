@@ -82,6 +82,51 @@ async function main() {
     ON CONFLICT (key) DO NOTHING;
   `;
 
+  console.log("Creating table: projects…");
+  await sql`
+    CREATE TABLE IF NOT EXISTS projects (
+      id            SERIAL PRIMARY KEY,
+      name          TEXT UNIQUE NOT NULL,
+      target_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      active        BOOLEAN NOT NULL DEFAULT true,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `;
+
+  // Each contribution can belong to a project (its own progress bar). Nullable
+  // so contributions can exist without one; SET NULL keeps history if a project
+  // is deleted.
+  console.log("Linking contributions to projects…");
+  await sql`
+    ALTER TABLE contributions
+      ADD COLUMN IF NOT EXISTS project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL;
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS contributions_project_id_idx ON contributions(project_id);`;
+
+  // Seed starter projects mirroring the original contribution types, so existing
+  // records migrate cleanly. Admins rename/add their own (Tour, Registration…).
+  console.log("Seeding starter projects…");
+  await sql`
+    INSERT INTO projects (name)
+    VALUES ('Subscriptions'), ('Dominica'), ('Projects'), ('Other')
+    ON CONFLICT (name) DO NOTHING;
+  `;
+
+  // Backfill project_id for any older contributions from their legacy `type`.
+  console.log("Backfilling project_id from legacy type…");
+  await sql`
+    UPDATE contributions c
+    SET project_id = p.id
+    FROM projects p
+    WHERE c.project_id IS NULL
+      AND (
+        (c.type = 'subscription' AND p.name = 'Subscriptions') OR
+        (c.type = 'dominica'     AND p.name = 'Dominica')      OR
+        (c.type = 'project'      AND p.name = 'Projects')      OR
+        (c.type = 'other'        AND p.name = 'Other')
+      );
+  `;
+
   console.log("\n✅ Database initialised.");
   console.log(
     "Next: create your first admin from a Node REPL or a one-off insert (see README)."

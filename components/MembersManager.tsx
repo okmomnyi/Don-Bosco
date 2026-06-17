@@ -109,6 +109,22 @@ export default function MembersManager() {
     if (ok) setEditingId(null);
   }
 
+  async function remove(m: Member) {
+    setError(null);
+    const warn =
+      Number(m.total) > 0
+        ? `Permanently delete ${m.name}? This also deletes their ${ksh(m.total)} of contribution records. Use Deactivate instead to keep history.`
+        : `Permanently delete ${m.name}? This can't be undone.`;
+    if (!window.confirm(warn)) return;
+    const res = await fetch(`/api/admin/members/${m.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Couldn't delete member.");
+      return;
+    }
+    await load();
+  }
+
   return (
     <div>
       {error && (
@@ -213,6 +229,9 @@ export default function MembersManager() {
                     </button>
                     <button onClick={() => patch(m.id, { active: !m.active })} className="rounded-full border border-ink/15 px-3 py-1.5 text-ink/70 hover:text-ink">
                       {m.active ? "Deactivate" : "Reactivate"}
+                    </button>
+                    <button onClick={() => remove(m)} className="rounded-full border border-ink/15 px-3 py-1.5 text-ink/60 hover:border-coral/50 hover:text-coral">
+                      Delete
                     </button>
                   </div>
                 </div>

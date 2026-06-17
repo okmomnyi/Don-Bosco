@@ -23,9 +23,11 @@ export async function GET(req: Request) {
   const { rows } = await sql`
     SELECT
       c.id, c.amount::text AS amount, c.type, c.date, c.notes,
+      c.project_id, p.name AS project_name,
       u.name AS member_name, u.id AS user_id
     FROM contributions c
     JOIN users u ON u.id = c.user_id
+    LEFT JOIN projects p ON p.id = c.project_id
     ORDER BY c.date DESC, c.id DESC
     LIMIT ${safeLimit}
   `;
@@ -42,6 +44,7 @@ export async function POST(req: Request) {
   let body: {
     userId?: number;
     amount?: number | string;
+    projectId?: number | string;
     type?: string;
     date?: string;
     notes?: string;
@@ -54,7 +57,10 @@ export async function POST(req: Request) {
 
   const userId = Number(body.userId);
   const amount = Number(body.amount);
-  const { type, date, notes } = body;
+  const projectId = Number(body.projectId);
+  const { date, notes } = body;
+  // `type` is legacy/optional now that contributions are grouped by project.
+  const type = isValidType(body.type) ? body.type : "other";
 
   if (!Number.isInteger(userId)) {
     return NextResponse.json({ error: "Select a member." }, { status: 400 });
@@ -65,8 +71,8 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  if (!isValidType(type)) {
-    return NextResponse.json({ error: "Choose a contribution type." }, { status: 400 });
+  if (!Number.isInteger(projectId)) {
+    return NextResponse.json({ error: "Choose a project." }, { status: 400 });
   }
   if (!date) {
     return NextResponse.json({ error: "Choose a date." }, { status: 400 });
@@ -74,20 +80,23 @@ export async function POST(req: Request) {
 
   try {
     const { rows } = await sql`
-      INSERT INTO contributions (user_id, amount, type, date, recorded_by, notes)
-      VALUES (${userId}, ${amount}, ${type}, ${date}, ${admin.id}, ${notes ?? null})
-      RETURNING id, amount::text AS amount, type, date, notes
+      INSERT INTO contributions (user_id, amount, type, project_id, date, recorded_by, notes)
+      VALUES (${userId}, ${amount}, ${type}, ${projectId}, ${date}, ${admin.id}, ${notes ?? null})
+      RETURNING id, amount::text AS amount, type, project_id, date, notes
     `;
     return NextResponse.json({ contribution: rows[0] }, { status: 201 });
   } catch (err: unknown) {
-    // foreign_key_violation — member doesn't exist
+    // foreign_key_violation — member or project doesn't exist
     if (
       typeof err === "object" &&
       err !== null &&
       "code" in err &&
       (err as { code?: string }).code === "23503"
     ) {
-      return NextResponse.json({ error: "That member doesn't exist." }, { status: 400 });
+      return NextResponse.json(
+        { error: "That member or project doesn't exist." },
+        { status: 400 }
+      );
     }
     throw err;
   }
