@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine, SunMark } from "@/components/Horizon";
 import { sql } from "@/lib/db";
 
@@ -17,6 +18,7 @@ const sources = [
  * page always renders (e.g. during local dev before `npm run db:init`).
  */
 async function getFundsRaisedPercent(): Promise<number> {
+  noStore();
   try {
     const [raised, goalRow] = await Promise.all([
       sql`SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM contributions`,
@@ -35,6 +37,7 @@ type ProjectProgress = { id: number; name: string; raised: number; target: numbe
 
 /** Active projects with how much each has raised, for the per-project bars. */
 async function getProjectProgress(): Promise<ProjectProgress[]> {
+  noStore();
   try {
     const { rows } = await sql`
       SELECT p.id, p.name,

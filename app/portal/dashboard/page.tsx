@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine, SunMark } from "@/components/Horizon";
 import SignOutButton from "@/components/SignOutButton";
 import { getCurrentUser } from "@/lib/auth";
@@ -30,6 +31,7 @@ function formatDate(iso: string): string {
 }
 
 export default async function DashboardPage() {
+  noStore();
   const user = await getCurrentUser();
   if (!user) redirect("/portal");
   if (user.must_change_password) redirect("/portal/change-password");

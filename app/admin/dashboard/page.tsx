@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine } from "@/components/Horizon";
 import AdminNav from "@/components/AdminNav";
 import { requireAdmin } from "@/lib/auth";
@@ -14,6 +15,7 @@ function ksh(amount: number): string {
 }
 
 export default async function AdminDashboardPage() {
+  noStore();
   const admin = await requireAdmin();
   if (!admin) redirect("/admin/login");
 
