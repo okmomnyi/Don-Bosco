@@ -1,10 +1,26 @@
 import { NextResponse } from "next/server";
-import { sql } from "@/lib/db";
-import { checkAdmin, adminDenialResponse, normalizePhone } from "@/lib/auth";
+import { db, sql } from "@/lib/db";
+import {
+  checkAdmin,
+  adminDenialResponse,
+  normalizePhone,
+  hashPassword,
+  generateTempPassword,
+} from "@/lib/auth";
+
+/** Columns safe to read into the audit log — never the password hash. */
+const SAFE_COLUMNS = `id, name, phone, role, active, must_change_password`;
 
 /**
- * Edit a member (name / phone / role) and/or activate-deactivate them.
- * Body may include any of: { name, phone, role, active }.
+ * Edit a member (name / phone / role), activate-deactivate them, or issue a
+ * fresh temporary password.
+ *
+ * Body may include any of: { name, phone, role, active, resetPassword }.
+ *
+ * The whole thing is one transaction with a single UPDATE (M1). The previous
+ * version issued a separate UPDATE per supplied field, so a failure partway
+ * through left a half-applied edit — a phone changed but the role not — with
+ * no error surfaced to the caller.
  */
 export async function PATCH(
   req: Request,
@@ -24,6 +40,7 @@ export async function PATCH(
     phone?: string;
     role?: string;
     active?: boolean;
+    resetPassword?: boolean;
   };
   try {
     body = await req.json();
@@ -41,11 +58,23 @@ export async function PATCH(
 
   const demoting = body.role === "member";
   const deactivating = body.active === false;
+  const resetting = body.resetPassword === true;
 
   // Guard: an admin can't deactivate or demote themselves (avoids lock-out).
   if (id === admin.id && (deactivating || demoting)) {
     return NextResponse.json(
       { error: "You can't deactivate or demote your own admin account." },
+      { status: 400 }
+    );
+  }
+  // Nor issue themselves a temporary password: it would sign them out and hand
+  // them a password meant to be read aloud to somebody else.
+  if (id === admin.id && resetting) {
+    return NextResponse.json(
+      {
+        error:
+          "To change your own password, use Set your password in the portal. A reset issues a temporary one for someone else.",
+      },
       { status: 400 }
     );
   }
@@ -70,75 +99,112 @@ export async function PATCH(
     }
   }
 
-  // Build the update from only the fields provided.
+  let name: string | null = null;
   if (body.name !== undefined) {
-    const name = body.name.trim();
+    name = body.name.trim();
     if (!name) {
       return NextResponse.json({ error: "Name can't be empty." }, { status: 400 });
     }
-    await sql`UPDATE users SET name = ${name} WHERE id = ${id}`;
   }
 
+  let phone: string | null = null;
   if (body.phone !== undefined) {
-    const phone = normalizePhone(body.phone);
+    phone = normalizePhone(body.phone);
     if (!phone) {
       return NextResponse.json(
         { error: "Enter a valid Kenyan phone number." },
         { status: 400 }
       );
     }
-    try {
-      await sql`UPDATE users SET phone = ${phone} WHERE id = ${id}`;
-    } catch (err: unknown) {
-      if (
-        typeof err === "object" &&
-        err !== null &&
-        "code" in err &&
-        (err as { code?: string }).code === "23505"
-      ) {
-        return NextResponse.json(
-          { error: "Another member already uses that phone number." },
-          { status: 409 }
-        );
-      }
-      throw err;
+  }
+
+  // Hashing is slow, so it happens before the transaction opens rather than
+  // holding a row lock for the length of a bcrypt round.
+  let tempPassword: string | null = null;
+  let tempHash: string | null = null;
+  if (resetting) {
+    tempPassword = generateTempPassword();
+    tempHash = await hashPassword(tempPassword);
+  }
+
+  const client = await db.connect();
+  try {
+    await client.sql`BEGIN`;
+
+    const { rows: beforeRows } = await client.query(
+      `SELECT ${SAFE_COLUMNS} FROM users WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    const before = beforeRows[0];
+    if (!before) {
+      await client.sql`ROLLBACK`;
+      return NextResponse.json({ error: "Member not found." }, { status: 404 });
     }
-  }
 
-  // A role change or a deactivation bumps token_version, which invalidates
-  // every session that user already holds. Without it, a demoted admin keeps
-  // working admin credentials until their token expires (up to two hours).
-  if (body.role !== undefined) {
-    await sql`
-      UPDATE users
-      SET role = ${body.role}, token_version = token_version + 1
-      WHERE id = ${id} AND role <> ${body.role}
+    // One statement. COALESCE leaves any field that wasn't supplied alone, and
+    // token_version is bumped only when something happened that should evict
+    // that user's live sessions.
+    const { rows: afterRows } = await client.query(
+      `UPDATE users SET
+         name   = COALESCE($2::text, name),
+         phone  = COALESCE($3::text, phone),
+         role   = COALESCE($4::text, role),
+         active = COALESCE($5::boolean, active),
+         password_hash            = COALESCE($6::text, password_hash),
+         must_change_password     = CASE WHEN $7::boolean THEN true
+                                         ELSE must_change_password END,
+         temp_password_expires_at = CASE WHEN $7::boolean
+                                         THEN now() + interval '7 days'
+                                         ELSE temp_password_expires_at END,
+         token_version = token_version + CASE
+           WHEN $7::boolean THEN 1
+           WHEN $4::text IS NOT NULL AND role <> $4::text THEN 1
+           WHEN $5::boolean IS NOT NULL AND active <> $5::boolean THEN 1
+           ELSE 0 END
+       WHERE id = $1
+       RETURNING ${SAFE_COLUMNS}`,
+      [id, name, phone, body.role ?? null, body.active ?? null, tempHash, resetting]
+    );
+    const after = afterRows[0];
+
+    await client.sql`
+      INSERT INTO audit_log (actor_id, action, entity, entity_id, before, after)
+      VALUES (${admin.id}, ${resetting ? "user.reset_password" : "user.update"},
+              'user', ${id},
+              ${JSON.stringify(before)}::jsonb, ${JSON.stringify(after)}::jsonb)
     `;
-  }
 
-  if (body.active !== undefined) {
-    await sql`
-      UPDATE users
-      SET active = ${body.active}, token_version = token_version + 1
-      WHERE id = ${id} AND active <> ${body.active}
-    `;
-  }
+    await client.sql`COMMIT`;
 
-  const { rows } = await sql`
-    SELECT id, name, phone, role, active, must_change_password
-    FROM users WHERE id = ${id}
-  `;
-  if (rows.length === 0) {
-    return NextResponse.json({ error: "Member not found." }, { status: 404 });
+    // The temporary password is returned exactly once, the same way account
+    // creation does it. It is never stored anywhere in readable form.
+    return NextResponse.json(
+      tempPassword ? { member: after, tempPassword } : { member: after }
+    );
+  } catch (err: unknown) {
+    await client.sql`ROLLBACK`.catch(() => {});
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: string }).code === "23505"
+    ) {
+      return NextResponse.json(
+        { error: "Another member already uses that phone number." },
+        { status: 409 }
+      );
+    }
+    throw err;
+  } finally {
+    client.release();
   }
-
-  return NextResponse.json({ member: rows[0] });
 }
 
 /**
- * Permanently delete a member. Their contributions are removed too
- * (contributions.user_id is ON DELETE CASCADE). Intended for cleaning up
- * wrongly-created accounts — use Deactivate (PATCH) to keep history instead.
+ * Permanently delete a member. Only possible for someone with no money against
+ * their name — ledger_entries.user_id is ON DELETE RESTRICT, which is the whole
+ * point: a mis-click used to erase a member's entire financial history.
+ * Use Deactivate (PATCH) to retire someone who has contributed.
  */
 export async function DELETE(
   _req: Request,
@@ -159,9 +225,6 @@ export async function DELETE(
     );
   }
 
-  // ledger_entries.user_id is ON DELETE RESTRICT, so the database refuses to
-  // delete anyone who has contributions. That is the point: a mis-click used to
-  // erase a member's entire financial history with no way to reconstruct it.
   try {
     const { rowCount } = await sql`DELETE FROM users WHERE id = ${id}`;
     if (rowCount === 0) {

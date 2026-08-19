@@ -54,3 +54,6 @@ desktop.ini
 
 # --- Migration output (contains members' temp passwords) ---
 migration-output.csv
+
+# Reference material from the external audit — kept locally, not published.
+docs/

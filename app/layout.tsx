@@ -3,6 +3,7 @@ import { Fraunces, Inter, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import { SITE_URL } from "@/lib/site";
 
 const display = Fraunces({
   subsets: ["latin"],
@@ -23,10 +24,31 @@ const mono = IBM_Plex_Mono({
   weight: ["400", "500"],
 });
 
+const description =
+  "Young, unmarried men and women aged 18-25 walking together in faith at Don Bosco, Changamwe Parish.";
+
 export const metadata: Metadata = {
-  title: "St. Mary's Senior Youth — Don Bosco, Changamwe Parish",
-  description:
-    "Young, unmarried men and women aged 18-25 walking together in faith at Don Bosco, Changamwe Parish.",
+  // metadataBase makes the OG image URL absolute. Without it Next emits a
+  // relative path and link previews come out blank when shared.
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: "St. Mary's Senior Youth — Don Bosco, Changamwe Parish",
+    template: "%s — St. Mary's Senior Youth",
+  },
+  description,
+  openGraph: {
+    title: "St. Mary's Senior Youth — Don Bosco, Changamwe Parish",
+    description,
+    url: SITE_URL,
+    siteName: "St. Mary's Senior Youth",
+    locale: "en_KE",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "St. Mary's Senior Youth — Don Bosco, Changamwe Parish",
+    description,
+  },
 };
 
 export default function RootLayout({

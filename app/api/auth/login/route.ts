@@ -4,10 +4,12 @@ import { sql, type UserRow } from "@/lib/db";
 import {
   hashPassword,
   verifyPassword,
+  needsRehash,
   normalizePhone,
   signSession,
   COOKIE_NAME,
   SESSION_MAX_AGE,
+  SESSION_COOKIE_OPTIONS,
 } from "@/lib/auth";
 import {
   clientIp,
@@ -74,6 +76,20 @@ export async function POST(req: Request) {
   // happens next — it clears the phone's failure count.
   await recordAttempt(phone, ip, true);
 
+  // Opportunistically upgrade a hash made at an older cost factor. This is the
+  // only moment the plaintext is available, and it is what eventually removes
+  // the timing difference between an old account (cost 10, ~90ms) and a new or
+  // non-existent one (cost 12, ~370ms). Failure here must never block a valid
+  // sign-in, so it is logged and swallowed.
+  if (needsRehash(user.password_hash)) {
+    try {
+      const upgraded = await hashPassword(password);
+      await sql`UPDATE users SET password_hash = ${upgraded} WHERE id = ${user.id}`;
+    } catch (err) {
+      console.error("[login] could not re-hash password for user", user.id, err);
+    }
+  }
+
   // A temporary password stops working after its expiry. Checked only once the
   // password has been verified, so an outsider can't discover which accounts
   // are sitting on an unused temporary password.
@@ -108,10 +124,7 @@ export async function POST(req: Request) {
   });
 
   res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
+    ...SESSION_COOKIE_OPTIONS,
     maxAge: SESSION_MAX_AGE,
   });
 

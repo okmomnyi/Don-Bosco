@@ -7,6 +7,7 @@ import {
   signSession,
   COOKIE_NAME,
   SESSION_MAX_AGE,
+  SESSION_COOKIE_OPTIONS,
 } from "@/lib/auth";
 import {
   clientIp,
@@ -115,10 +116,7 @@ export async function POST(req: Request) {
     tokenVersion: updated[0]?.token_version ?? user.token_version + 1,
   });
   res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
+    ...SESSION_COOKIE_OPTIONS,
     maxAge: SESSION_MAX_AGE,
   });
 

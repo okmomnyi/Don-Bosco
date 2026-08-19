@@ -52,6 +52,11 @@ Admins (signed in, `role = admin`):
 - `/admin/statement` — Both directions interleaved with a running balance.
 - `/admin/audit` — Who changed what, when, and what it was before.
 
+Members are added, edited, deactivated and issued a fresh temporary password
+from `/admin/members`. There is no self-service password reset: the group holds
+no email addresses, so a member who is locked out asks an admin, who issues a
+new temporary password and reads it to them.
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local` and fill in:
@@ -61,6 +66,7 @@ Copy `.env.example` to `.env.local` and fill in:
 | `POSTGRES_URL` | Vercel Postgres / Neon connection string.                         |
 | `JWT_SECRET`   | Session signing secret. **At least 32 characters**, and it must not contain `change-me`. The app refuses to sign or verify a session otherwise, rather than running on a guessable secret. |
 | `FUNDS_GOAL`   | (Optional) Target amount in Ksh, used only to seed `funds_goal`.  |
+| `NEXT_PUBLIC_SITE_URL` | (Optional) Canonical public URL, used for `metadataBase`, the sitemap and robots. Defaults to the current Vercel deployment; set it once the group has its own domain, or link previews and the sitemap will point at the old address. |
 | `CI`           | (Optional) Set to `true` only in automation, to let `create-admin` take the password as an argument instead of prompting. |
 
 Generate a secret:
@@ -84,6 +90,7 @@ npm run db:init
 # 2. Apply the migrations, in this order. 003 depends on 002 having run.
 npm run db:migrate -- sql/002_auth_hardening.sql
 npm run db:migrate -- sql/003_ledger.sql
+npm run db:migrate -- sql/004_void_constraint.sql
 
 # 3. Create the first admin (bootstrap — afterwards add admins from the panel).
 #    The password is prompted for, not passed as an argument.
@@ -104,6 +111,7 @@ backfill entirely once `contributions` has been renamed. They all read
 | ---- | ------------ |
 | `sql/002_auth_hardening.sql` | Adds `users.token_version` (session revocation) and `users.temp_password_expires_at`, and creates `login_attempts` for rate limiting. Additive only. |
 | `sql/003_ledger.sql` | Creates `ledger_entries` and its views, copies every `contributions` row across, then renames `contributions` to `contributions_legacy`. |
+| `sql/004_void_constraint.sql` | Corrects a CHECK from 003 that made any user who had voided an entry impossible to delete. |
 
 **`003` is a breaking change for any code still reading `contributions`.** Run
 it as part of the same cutover that deploys the ledger-aware code, not hours

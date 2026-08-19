@@ -9,8 +9,42 @@ import { SignJWT, jwtVerify } from "jose";
  * imported from middleware.
  */
 
-export const COOKIE_NAME = "session";
+/**
+ * Cookies are only marked Secure where the connection actually is. The
+ * `__Host-` prefix requires Secure, so it can only be used in production —
+ * a browser silently rejects a `__Host-` cookie sent over plain http, which
+ * would make local development impossible to sign in to.
+ */
+const SECURE_COOKIES = process.env.NODE_ENV === "production";
+
+/**
+ * The `__Host-` prefix binds the cookie to the exact origin: it may not carry a
+ * Domain attribute, so a compromised or hostile subdomain cannot overwrite the
+ * session cookie for the parent site.
+ *
+ * Changing this name signs everybody out — the old cookie is simply not read
+ * any more. That is a one-off cost, not a recurring one.
+ */
+export const COOKIE_NAME = SECURE_COOKIES ? "__Host-session" : "session";
 export const SESSION_MAX_AGE = 60 * 60 * 2; // 2 hours, in seconds
+
+/**
+ * One definition of the cookie's attributes, shared by every route that sets
+ * it, so login, logout and change-password cannot drift apart.
+ *
+ * `sameSite: "strict"` is the whole CSRF defence for the JSON endpoints, and it
+ * costs nothing here: there is no cross-site flow into this app: every sign-in
+ * starts on one of its own pages.
+ *
+ * `path: "/"` and the absence of `domain` are not stylistic — `__Host-`
+ * requires both.
+ */
+export const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: SECURE_COOKIES,
+  sameSite: "strict",
+  path: "/",
+} as const;
 
 export type SessionPayload = {
   sub: string; // user id (stringified)

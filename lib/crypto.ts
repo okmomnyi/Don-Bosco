@@ -17,6 +17,17 @@ export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, SALT_ROUNDS);
 }
 
+/**
+ * True if a stored hash was made with an older cost factor than we now use.
+ * bcrypt hashes look like `$2a$10$<22-char salt><31-char digest>`, so the cost
+ * is the two digits after the second `$`.
+ */
+export function needsRehash(hash: string): boolean {
+  const parts = hash.split("$");
+  const cost = Number(parts[2]);
+  return Number.isInteger(cost) && cost < SALT_ROUNDS;
+}
+
 export async function verifyPassword(
   password: string,
   hash: string

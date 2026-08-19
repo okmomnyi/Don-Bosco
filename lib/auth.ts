@@ -3,13 +3,20 @@ import { cookies } from "next/headers";
 import { sql, type UserRow } from "@/lib/db";
 import { COOKIE_NAME, verifySession, type SessionPayload } from "@/lib/session";
 
-export { COOKIE_NAME, SESSION_MAX_AGE, signSession, verifySession } from "@/lib/session";
+export {
+  COOKIE_NAME,
+  SESSION_MAX_AGE,
+  SESSION_COOKIE_OPTIONS,
+  signSession,
+  verifySession,
+} from "@/lib/session";
 export type { SessionPayload } from "@/lib/session";
 export {
   hashPassword,
   verifyPassword,
   normalizePhone,
   generateTempPassword,
+  needsRehash,
 } from "@/lib/crypto";
 
 /** A user record with the password hash stripped. */

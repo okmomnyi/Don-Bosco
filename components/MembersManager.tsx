@@ -39,6 +39,7 @@ export default function MembersManager() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
+  const [resettingId, setResettingId] = useState<number | null>(null);
 
   async function load() {
     setLoading(true);
@@ -98,6 +99,47 @@ export default function MembersManager() {
     return true;
   }
 
+  /**
+   * Issue a fresh temporary password. This is the only way to get a member
+   * back in if they never used the one they were given, or if it expired —
+   * there is no self-service reset, since the group has no email addresses on
+   * file to send one to.
+   */
+  async function resetPassword(m: Member) {
+    setError(null);
+    if (
+      !window.confirm(
+        `Issue ${m.name} a new temporary password?
+
+` +
+          "Their current password stops working immediately and they are signed " +
+          "out everywhere. The new one is shown once — read it to them directly."
+      )
+    )
+      return;
+    setResettingId(m.id);
+    try {
+      const res = await fetch(`/api/admin/members/${m.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resetPassword: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Couldn't reset that password.");
+        return;
+      }
+      setTempNotice({
+        name: data.member.name,
+        phone: data.member.phone,
+        password: data.tempPassword,
+      });
+      await load();
+    } finally {
+      setResettingId(null);
+    }
+  }
+
   function startEdit(m: Member) {
     setEditingId(m.id);
     setEditName(m.name);
@@ -111,9 +153,12 @@ export default function MembersManager() {
 
   async function remove(m: Member) {
     setError(null);
+    // Anyone with money against their name can no longer be deleted at all —
+    // ledger_entries.user_id is ON DELETE RESTRICT and the API returns a 409.
+    // Say so before the round trip rather than after it.
     const warn =
       Number(m.total) > 0
-        ? `Permanently delete ${m.name}? This also deletes their ${ksh(m.total)} of contribution records. Use Deactivate instead to keep history.`
+        ? `${m.name} has ${ksh(m.total)} of contributions recorded, so their account can't be deleted — the record is kept. Deactivate them instead?`
         : `Permanently delete ${m.name}? This can't be undone.`;
     if (!window.confirm(warn)) return;
     const res = await fetch(`/api/admin/members/${m.id}`, { method: "DELETE" });
@@ -229,6 +274,13 @@ export default function MembersManager() {
                     </button>
                     <button onClick={() => patch(m.id, { active: !m.active })} className="rounded-full border border-ink/15 px-3 py-1.5 text-ink/70 hover:text-ink">
                       {m.active ? "Deactivate" : "Reactivate"}
+                    </button>
+                    <button
+                      onClick={() => resetPassword(m)}
+                      disabled={resettingId === m.id}
+                      className="rounded-full border border-ink/15 px-3 py-1.5 text-ink/70 hover:text-ink disabled:opacity-50"
+                    >
+                      {resettingId === m.id ? "Resetting…" : "Reset password"}
                     </button>
                     <button onClick={() => remove(m)} className="rounded-full border border-ink/15 px-3 py-1.5 text-ink/60 hover:border-coral/50 hover:text-coral">
                       Delete
