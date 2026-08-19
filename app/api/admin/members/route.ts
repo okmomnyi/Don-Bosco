@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import {
-  requireAdmin,
+  checkAdmin,
+  adminDenialResponse,
   normalizePhone,
   hashPassword,
   generateTempPassword,
 } from "@/lib/auth";
 
 export async function GET() {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
+  // member_totals already does the aggregate, and it counts contributions
+  // only — so group spending can never reduce what a member is shown as having
+  // put in.
   const { rows } = await sql`
     SELECT
       u.id,
@@ -21,10 +23,9 @@ export async function GET() {
       u.role,
       u.active,
       u.must_change_password,
-      COALESCE(SUM(c.amount), 0)::text AS total
+      mt.total::text AS total
     FROM users u
-    LEFT JOIN contributions c ON c.user_id = u.id
-    GROUP BY u.id
+    JOIN member_totals mt ON mt.id = u.id
     ORDER BY u.active DESC, u.name ASC
   `;
 
@@ -32,10 +33,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   let body: { name?: string; phone?: string; role?: string };
   try {
@@ -62,10 +61,15 @@ export async function POST(req: Request) {
   const hash = await hashPassword(tempPassword);
 
   try {
+    // The temporary password is good for a week. An account that is never
+    // activated should not stay sign-in-able on a password an admin read out
+    // over the phone once and then forgot about.
     const { rows } = await sql`
-      INSERT INTO users (name, phone, password_hash, role, must_change_password)
-      VALUES (${name}, ${phone}, ${hash}, ${role}, true)
-      RETURNING id, name, phone, role, active, must_change_password
+      INSERT INTO users (name, phone, password_hash, role, must_change_password,
+                         temp_password_expires_at)
+      VALUES (${name}, ${phone}, ${hash}, ${role}, true, now() + interval '7 days')
+      RETURNING id, name, phone, role, active, must_change_password,
+                temp_password_expires_at
     `;
     return NextResponse.json({ member: rows[0], tempPassword }, { status: 201 });
   } catch (err: unknown) {

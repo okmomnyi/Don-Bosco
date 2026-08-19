@@ -3,12 +3,22 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+/** Kept in step with MIN_PASSWORD_LENGTH in app/api/auth/change-password. */
+const MIN_PASSWORD_LENGTH = 10;
+
 export default function ChangePasswordForm({
   redirectTo,
+  requireCurrent,
 }: {
   redirectTo: string;
+  /**
+   * Whether to ask for the existing password. False only on first sign-in,
+   * where the temporary password was presented at login moments ago.
+   */
+  requireCurrent: boolean;
 }) {
   const router = useRouter();
+  const [current, setCurrent] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -18,8 +28,12 @@ export default function ChangePasswordForm({
     e.preventDefault();
     setError(null);
 
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (requireCurrent && !current) {
+      setError("Enter your current password.");
+      return;
+    }
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     if (password !== confirm) {
@@ -32,7 +46,11 @@ export default function ChangePasswordForm({
       const res = await fetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPassword: password }),
+        body: JSON.stringify(
+          requireCurrent
+            ? { currentPassword: current, newPassword: password }
+            : { newPassword: password }
+        ),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -59,6 +77,27 @@ export default function ChangePasswordForm({
         </p>
       )}
 
+      {requireCurrent && (
+        <div>
+          <label
+            htmlFor="current-password"
+            className="font-mono text-xs uppercase tracking-[0.2em] text-sage"
+          >
+            Current password
+          </label>
+          <input
+            id="current-password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            placeholder="The password you use now"
+            className="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 font-body text-sm text-ink placeholder:text-ink/30 focus:border-coral focus:outline-none"
+          />
+        </div>
+      )}
+
       <div>
         <label
           htmlFor="new-password"
@@ -73,7 +112,7 @@ export default function ChangePasswordForm({
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="At least 6 characters"
+          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
           className="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 font-body text-sm text-ink placeholder:text-ink/30 focus:border-coral focus:outline-none"
         />
       </div>

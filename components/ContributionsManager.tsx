@@ -7,7 +7,8 @@ type ProjectOption = { id: number; name: string; active: boolean };
 type Contribution = {
   id: number;
   amount: string;
-  type: "subscription" | "dominica" | "project" | "other";
+  /** Legacy category label; null on anything recorded since the ledger. */
+  type: "subscription" | "dominica" | "project" | "other" | null;
   project_id: number | null;
   project_name: string | null;
   date: string;
@@ -16,16 +17,20 @@ type Contribution = {
   user_id: number;
 };
 
-const TYPE_LABELS: Record<Contribution["type"], string> = {
+const TYPE_LABELS: Record<string, string> = {
   subscription: "Subscription",
   dominica: "Dominica",
   project: "Project",
   other: "Other",
 };
 
-/** What to show as a contribution's category — its project, or legacy type. */
+/**
+ * What to show as a contribution's category: its project, or the legacy label
+ * carried over by the ledger migration. New entries have no legacy label at
+ * all, so "Other" is the last resort rather than an empty badge.
+ */
 function categoryLabel(c: Contribution): string {
-  return c.project_name ?? TYPE_LABELS[c.type] ?? "—";
+  return c.project_name ?? (c.type ? TYPE_LABELS[c.type] : null) ?? "Other";
 }
 
 function ksh(v: string | number): string {
@@ -61,6 +66,7 @@ export default function ContributionsManager({ today }: { today: string }) {
   const [filterTo, setFilterTo] = useState("");
   const [filteredTotal, setFilteredTotal] = useState("0");
   const [filteredCount, setFilteredCount] = useState(0);
+  const [shownCount, setShownCount] = useState(0);
 
   // Form
   const [search, setSearch] = useState("");
@@ -71,13 +77,13 @@ export default function ContributionsManager({ today }: { today: string }) {
   const [date, setDate] = useState(today);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  // One key per entry being typed. It goes with the POST and is regenerated on
+  // success, so a double-tap or a retry on a slow connection cannot record the
+  // same payment twice.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
-  // Per-row edit state
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [eAmount, setEAmount] = useState("");
-  const [eProjectId, setEProjectId] = useState("");
-  const [eDate, setEDate] = useState(today);
-  const [eNotes, setENotes] = useState("");
+  // Per-row void state
+  const [voidingId, setVoidingId] = useState<number | null>(null);
 
   // Members + projects load once (used by the form and the filter dropdown).
   const loadOptions = useCallback(async () => {
@@ -88,7 +94,10 @@ export default function ContributionsManager({ today }: { today: string }) {
       ]);
       const mData = await mRes.json();
       const pData = await pRes.json();
-      setMembers((mData.members ?? []).filter((m: MemberOption) => m.active));
+      // Inactive members stay in the list. A contribution recorded against
+      // someone who was later deactivated still has to be correctable — void
+      // and re-record needs them selectable, or the mistake is permanent.
+      setMembers(mData.members ?? []);
       setProjects(pData.projects ?? []); // keep all (filter dropdown needs hidden ones too)
     } catch {
       setError("Couldn't load data.");
@@ -106,9 +115,14 @@ export default function ContributionsManager({ today }: { today: string }) {
       if (filterTo) qs.set("to", filterTo);
       const res = await fetch(`/api/admin/contributions?${qs.toString()}`);
       const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Couldn't load contributions.");
+        return;
+      }
       setContributions(data.contributions ?? []);
       setFilteredTotal(data.total ?? "0");
       setFilteredCount(data.count ?? 0);
+      setShownCount(data.shown ?? (data.contributions ?? []).length);
     } catch {
       setError("Couldn't load data.");
     } finally {
@@ -145,9 +159,14 @@ export default function ContributionsManager({ today }: { today: string }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return members.slice(0, 8);
-    return members
-      .filter((m) => m.name.toLowerCase().includes(q) || m.phone.includes(q))
+    const matches = q
+      ? members.filter(
+          (m) => m.name.toLowerCase().includes(q) || m.phone.includes(q)
+        )
+      : members;
+    // Active members first; deactivated ones are still reachable below them.
+    return [...matches]
+      .sort((a, b) => Number(b.active) - Number(a.active))
       .slice(0, 8);
   }, [search, members]);
 
@@ -173,7 +192,14 @@ export default function ContributionsManager({ today }: { today: string }) {
       const res = await fetch("/api/admin/contributions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: memberId, amount, projectId, date, notes }),
+        body: JSON.stringify({
+          userId: memberId,
+          amount,
+          projectId,
+          date,
+          notes,
+          idempotencyKey,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -185,50 +211,49 @@ export default function ContributionsManager({ today }: { today: string }) {
       setNotes("");
       setSearch("");
       setMemberId(null);
+      setIdempotencyKey(crypto.randomUUID());
       await loadContributions();
     } finally {
       setSaving(false);
     }
   }
 
-  async function remove(id: number) {
+  /**
+   * Correct a mistake by voiding the entry and recording the right one.
+   *
+   * There is no edit and no delete: a financial record that can be changed or
+   * removed without trace is not a record. Voiding keeps the row, takes it out
+   * of every total, and writes who did it and why to the audit log.
+   */
+  async function voidContribution(c: Contribution) {
     setError(null);
-    const res = await fetch(`/api/admin/contributions/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      setError("Couldn't delete.");
+    const reason = window.prompt(
+      `Void ${ksh(c.amount)} from ${c.member_name} on ${fmtDate(c.date)}?
+
+` +
+        "The entry is kept and marked voided, not deleted. Give a reason:"
+    );
+    if (reason === null) return; // cancelled
+    if (!reason.trim()) {
+      setError("A reason is required to void an entry.");
       return;
     }
-    await loadContributions();
-  }
-
-  function startEdit(c: Contribution) {
-    setEditingId(c.id);
-    setEAmount(c.amount);
-    setEProjectId(c.project_id ? String(c.project_id) : "");
-    setEDate(c.date.slice(0, 10));
-    setENotes(c.notes ?? "");
-  }
-
-  async function saveEdit(id: number) {
-    setError(null);
-    const body: Record<string, unknown> = {
-      amount: eAmount,
-      date: eDate,
-      notes: eNotes,
-    };
-    if (eProjectId) body.projectId = eProjectId;
-    const res = await fetch(`/api/admin/contributions/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "Update failed.");
-      return;
+    setVoidingId(c.id);
+    try {
+      const res = await fetch(`/api/admin/ledger/${c.id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Couldn't void that entry.");
+        return;
+      }
+      await loadContributions();
+    } finally {
+      setVoidingId(null);
     }
-    setEditingId(null);
-    await loadContributions();
   }
 
   const noProjects = activeProjects.length === 0;
@@ -282,6 +307,11 @@ export default function ContributionsManager({ today }: { today: string }) {
                     >
                       {m.name}{" "}
                       <span className="font-mono text-xs text-ink/50">{m.phone}</span>
+                      {!m.active && (
+                        <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-ink/40">
+                          inactive
+                        </span>
+                      )}
                     </button>
                   </li>
                 ))}
@@ -330,6 +360,7 @@ export default function ContributionsManager({ today }: { today: string }) {
           <p className="mt-1 font-mono text-xs text-ink/50">
             {filteredCount} {filteredCount === 1 ? "entry" : "entries"} ·{" "}
             {ksh(filteredTotal)} total
+            {shownCount < filteredCount ? ` · showing ${shownCount}` : ""}
           </p>
         </div>
         {filtersActive && (
@@ -379,22 +410,7 @@ export default function ContributionsManager({ today }: { today: string }) {
         <ul className="mt-6 divide-y divide-ink/10 rounded-3xl border border-ink/10 bg-card">
           {contributions.map((c) => (
             <li key={c.id} className="px-5 py-4">
-              {editingId === c.id ? (
-                <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_2fr_auto] md:items-center">
-                  <input type="number" min="0" step="0.01" className={inputCls} value={eAmount} onChange={(e) => setEAmount(e.target.value)} />
-                  <select className={inputCls} value={eProjectId} onChange={(e) => setEProjectId(e.target.value)}>
-                    <option value="" disabled>Project…</option>
-                    {activeProjects.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                  </select>
-                  <input type="date" className={inputCls} value={eDate} onChange={(e) => setEDate(e.target.value)} />
-                  <input className={inputCls} value={eNotes} onChange={(e) => setENotes(e.target.value)} placeholder="Notes" />
-                  <div className="flex gap-2">
-                    <button onClick={() => saveEdit(c.id)} className="rounded-full bg-deep px-4 py-2 font-body text-xs text-cream hover:scale-105">Save</button>
-                    <button onClick={() => setEditingId(null)} className="rounded-full border border-ink/15 px-4 py-2 font-body text-xs text-ink/70">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <p className="font-body text-sm font-medium text-ink">
                       {c.member_name}
@@ -410,20 +426,14 @@ export default function ContributionsManager({ today }: { today: string }) {
                   <div className="flex items-center gap-3">
                     <p className="font-mono text-sm text-ink">{ksh(c.amount)}</p>
                     <button
-                      onClick={() => startEdit(c)}
-                      className="rounded-full border border-ink/15 px-3 py-1.5 font-body text-xs text-ink/60 hover:text-ink"
+                      onClick={() => voidContribution(c)}
+                      disabled={voidingId === c.id}
+                      className="rounded-full border border-ink/15 px-3 py-1.5 font-body text-xs text-ink/60 hover:border-coral/50 hover:text-coral disabled:opacity-50"
                     >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => remove(c.id)}
-                      className="rounded-full border border-ink/15 px-3 py-1.5 font-body text-xs text-ink/60 hover:border-coral/50 hover:text-coral"
-                    >
-                      Delete
+                      {voidingId === c.id ? "Voiding…" : "Void"}
                     </button>
                   </div>
-                </div>
-              )}
+              </div>
             </li>
           ))}
         </ul>

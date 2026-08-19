@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
-import { requireAdmin, normalizePhone } from "@/lib/auth";
+import { checkAdmin, adminDenialResponse, normalizePhone } from "@/lib/auth";
 
 /**
  * Edit a member (name / phone / role) and/or activate-deactivate them.
@@ -10,13 +10,12 @@ export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
+  const admin = check.user;
 
   const id = Number(params.id);
-  if (!Number.isInteger(id)) {
+  if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Invalid member id." }, { status: 400 });
   }
 
@@ -32,12 +31,43 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
+  // Validate the role up front against an explicit allowlist. The old code
+  // coerced anything that wasn't "admin" to "member", so the self-demotion
+  // guard below (which tested for the literal "member") could be walked past
+  // with PATCH {"role":"x"}.
+  if (body.role !== undefined && body.role !== "admin" && body.role !== "member") {
+    return NextResponse.json({ error: "Invalid role." }, { status: 400 });
+  }
+
+  const demoting = body.role === "member";
+  const deactivating = body.active === false;
+
   // Guard: an admin can't deactivate or demote themselves (avoids lock-out).
-  if (id === admin.id && (body.active === false || body.role === "member")) {
+  if (id === admin.id && (deactivating || demoting)) {
     return NextResponse.json(
       { error: "You can't deactivate or demote your own admin account." },
       { status: 400 }
     );
+  }
+
+  // Guard: never let the last active admin be demoted or deactivated. Without
+  // this, two admins can demote each other and recovery needs shell access.
+  if (demoting || deactivating) {
+    const { rows: adminCount } = await sql<{ n: number }>`
+      SELECT COUNT(*)::int AS n
+      FROM users
+      WHERE role = 'admin' AND active = true AND id <> ${id}
+    `;
+    if ((adminCount[0]?.n ?? 0) === 0) {
+      return NextResponse.json(
+        {
+          error: demoting
+            ? "This is the last active admin — promote someone else first."
+            : "This is the last active admin — promote someone else before deactivating them.",
+        },
+        { status: 400 }
+      );
+    }
   }
 
   // Build the update from only the fields provided.
@@ -75,13 +105,23 @@ export async function PATCH(
     }
   }
 
+  // A role change or a deactivation bumps token_version, which invalidates
+  // every session that user already holds. Without it, a demoted admin keeps
+  // working admin credentials until their token expires (up to two hours).
   if (body.role !== undefined) {
-    const role = body.role === "admin" ? "admin" : "member";
-    await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
+    await sql`
+      UPDATE users
+      SET role = ${body.role}, token_version = token_version + 1
+      WHERE id = ${id} AND role <> ${body.role}
+    `;
   }
 
   if (body.active !== undefined) {
-    await sql`UPDATE users SET active = ${body.active} WHERE id = ${id}`;
+    await sql`
+      UPDATE users
+      SET active = ${body.active}, token_version = token_version + 1
+      WHERE id = ${id} AND active <> ${body.active}
+    `;
   }
 
   const { rows } = await sql`
@@ -104,13 +144,12 @@ export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
+  const admin = check.user;
 
   const id = Number(params.id);
-  if (!Number.isInteger(id)) {
+  if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Invalid member id." }, { status: 400 });
   }
   if (id === admin.id) {
@@ -120,9 +159,30 @@ export async function DELETE(
     );
   }
 
-  const { rowCount } = await sql`DELETE FROM users WHERE id = ${id}`;
-  if (rowCount === 0) {
-    return NextResponse.json({ error: "Member not found." }, { status: 404 });
+  // ledger_entries.user_id is ON DELETE RESTRICT, so the database refuses to
+  // delete anyone who has contributions. That is the point: a mis-click used to
+  // erase a member's entire financial history with no way to reconstruct it.
+  try {
+    const { rowCount } = await sql`DELETE FROM users WHERE id = ${id}`;
+    if (rowCount === 0) {
+      return NextResponse.json({ error: "Member not found." }, { status: 404 });
+    }
+  } catch (err: unknown) {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: string }).code === "23503"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This member has contributions recorded against them. Deactivate them instead — it keeps the record and removes them from the active list.",
+        },
+        { status: 409 }
+      );
+    }
+    throw err;
   }
   return NextResponse.json({ ok: true });
 }

@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialResponse } from "@/lib/auth";
 
 export async function PATCH(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   const id = Number(params.id);
-  if (!Number.isInteger(id)) {
+  if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Invalid project id." }, { status: 400 });
   }
 
@@ -47,7 +45,8 @@ export async function PATCH(
   }
 
   if (body.target !== undefined) {
-    const target = Number(body.target);
+    // `Number(null)` is 0, so an explicit null would silently zero the target.
+    const target = body.target == null ? NaN : Number(body.target);
     if (!Number.isFinite(target) || target < 0) {
       return NextResponse.json(
         { error: "Target must be zero or a positive number." },
@@ -75,18 +74,36 @@ export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   const id = Number(params.id);
-  if (!Number.isInteger(id)) {
+  if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Invalid project id." }, { status: 400 });
   }
 
-  // Contributions reference the project with ON DELETE SET NULL, so deleting a
-  // project keeps the contribution records (they just lose their project tag).
-  await sql`DELETE FROM projects WHERE id = ${id}`;
+  // Ledger entries reference the project with ON DELETE RESTRICT, so the
+  // database refuses to delete a project that has money against it. Previously
+  // this was ON DELETE SET NULL, which silently orphaned the money: the rows
+  // stayed but lost their project and vanished from every per-project report.
+  try {
+    await sql`DELETE FROM projects WHERE id = ${id}`;
+  } catch (err: unknown) {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: string }).code === "23503"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This project has money recorded against it. Hide it instead of deleting.",
+        },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
   return NextResponse.json({ ok: true });
 }

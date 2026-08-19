@@ -5,23 +5,21 @@ import {
   parseAmount,
   parseDate,
   parseOptionalId,
-  parseRequiredId,
   parseMethod,
   optionalText,
+  requiredText,
   escapeLike,
-  recordContribution,
+  recordExpenditure,
   errorResponse,
 } from "@/lib/ledger";
 
 /**
- * Money in. Reads `ledger_live` filtered to kind = 'contribution', so voided
- * entries are excluded without this file having to remember to do it.
+ * Money out — the mirror of the contributions route.
  *
- * The response shape is unchanged from the pre-ledger version, so
- * components/ContributionsManager.tsx keeps working. `shown` is new (B7): the
- * totals cover the whole matching set while the list stops at `limit`, and the
- * UI needs to be able to say "showing 100 of 240" rather than implying the
- * figures above the list describe the rows in it.
+ * Two differences, both deliberate: a `payee` takes the place of a member id,
+ * because spending recorded against a member's user_id would silently reduce
+ * their contribution total; and `projectId` is optional, because general
+ * running costs (M-Pesa charges, stationery) belong to no project.
  */
 export async function GET(req: Request) {
   const check = await checkAdmin();
@@ -34,8 +32,7 @@ export async function GET(req: Request) {
     const safeLimit =
       Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
 
-    // Optional filters — build a parameterised WHERE clause for whatever is set.
-    const where: string[] = ["l.kind = 'contribution'"];
+    const where: string[] = ["l.kind = 'expenditure'"];
     const values: (string | number)[] = [];
 
     const projectId = parseOptionalId(params.get("projectId"));
@@ -43,11 +40,16 @@ export async function GET(req: Request) {
       values.push(projectId);
       where.push(`l.project_id = $${values.length}`);
     }
+    const category = (params.get("category") ?? "").trim();
+    if (category) {
+      values.push(category);
+      where.push(`l.category = $${values.length}`);
+    }
     const q = (params.get("q") ?? "").trim();
     if (q) {
       values.push(`%${escapeLike(q)}%`);
       where.push(
-        `(u.name ILIKE $${values.length} ESCAPE '\\' OR u.phone ILIKE $${values.length} ESCAPE '\\')`
+        `(l.payee ILIKE $${values.length} ESCAPE '\\' OR l.reference ILIKE $${values.length} ESCAPE '\\')`
       );
     }
     const from = params.get("from");
@@ -62,35 +64,41 @@ export async function GET(req: Request) {
     }
     const whereSql = `WHERE ${where.join(" AND ")}`;
 
-    // Totals across the whole matching set (not just the page).
     const totalsText = `
       SELECT COALESCE(SUM(l.amount), 0)::text AS total, COUNT(*)::int AS count
       FROM ledger_live l
-      JOIN users u ON u.id = l.user_id
       ${whereSql}
     `;
-    const totals = await sql.query(totalsText, values);
-
     const listText = `
       SELECT
-        l.id, l.amount::text AS amount, l.category AS type, l.date::text AS date, l.notes,
+        l.id, l.amount::text AS amount, l.payee, l.category, l.date::text AS date, l.notes,
         l.method, l.reference,
         l.project_id, p.name AS project_name,
-        u.name AS member_name, u.id AS user_id
+        rb.name AS recorded_by_name
       FROM ledger_live l
-      JOIN users u ON u.id = l.user_id
       LEFT JOIN projects p ON p.id = l.project_id
+      LEFT JOIN users rb ON rb.id = l.recorded_by
       ${whereSql}
       ORDER BY l.date DESC, l.id DESC
       LIMIT $${values.length + 1}
     `;
-    const list = await sql.query(listText, [...values, safeLimit]);
+
+    // The form needs the category list and the current balance, so they come
+    // back with the list rather than costing a second round trip.
+    const [totals, list, categories, position] = await Promise.all([
+      sql.query(totalsText, values),
+      sql.query(listText, [...values, safeLimit]),
+      sql`SELECT id, name FROM expense_categories WHERE active = true ORDER BY name ASC`,
+      sql`SELECT balance::text AS balance FROM fund_position`,
+    ]);
 
     return NextResponse.json({
-      contributions: list.rows,
+      expenditures: list.rows,
       total: totals.rows[0]?.total ?? "0",
       count: totals.rows[0]?.count ?? 0,
       shown: list.rows.length,
+      categories: categories.rows,
+      balance: position.rows[0]?.balance ?? "0",
     });
   } catch (err) {
     const { body, status } = errorResponse(err);
@@ -104,8 +112,9 @@ export async function POST(req: Request) {
   const admin = check.user;
 
   let body: {
-    userId?: number | string;
+    payee?: string;
     amount?: number | string;
+    category?: string;
     projectId?: number | string | null;
     date?: string;
     method?: string;
@@ -120,14 +129,12 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Money comes in *for* something, so a contribution must name a project.
-    // The legacy `type` column is gone (B6): it was written as 'other' on every
-    // row regardless of project, so it carried no information.
-    const entry = await recordContribution(
+    const entry = await recordExpenditure(
       {
-        userId: parseRequiredId(body.userId, "A member"),
+        payee: requiredText(body.payee, "Who was paid"),
         amount: parseAmount(body.amount),
-        projectId: parseRequiredId(body.projectId, "A project"),
+        category: optionalText(body.category, 100),
+        projectId: parseOptionalId(body.projectId),
         date: parseDate(body.date),
         method: parseMethod(body.method),
         reference: optionalText(body.reference, 100),
@@ -136,7 +143,7 @@ export async function POST(req: Request) {
       },
       admin.id
     );
-    return NextResponse.json({ contribution: entry }, { status: 201 });
+    return NextResponse.json({ expenditure: entry }, { status: 201 });
   } catch (err) {
     const { body: errBody, status } = errorResponse(err);
     return NextResponse.json(errBody, { status });

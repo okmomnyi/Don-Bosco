@@ -4,11 +4,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import SignOutButton from "@/components/SignOutButton";
 
+/**
+ * Highlighting below uses `pathname.startsWith(link.href)`, so no href here may
+ * be a prefix of another. None currently is — check that before adding one.
+ */
 const links = [
   { href: "/admin/dashboard", label: "Overview" },
   { href: "/admin/members", label: "Members" },
   { href: "/admin/contributions", label: "Contributions" },
+  { href: "/admin/expenditures", label: "Expenditure" },
+  { href: "/admin/statement", label: "Statement" },
   { href: "/admin/projects", label: "Projects" },
+  { href: "/admin/audit", label: "Audit log" },
 ];
 
 export default function AdminNav({ name }: { name: string }) {

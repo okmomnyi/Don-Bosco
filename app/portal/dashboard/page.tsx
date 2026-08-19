@@ -4,22 +4,34 @@ import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine, SunMark } from "@/components/Horizon";
 import SignOutButton from "@/components/SignOutButton";
 import { getCurrentUser } from "@/lib/auth";
-import { sql, type ContributionRow } from "@/lib/db";
+import { sql } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const TYPE_LABELS: Record<ContributionRow["type"], string> = {
-  subscription: "Subscription",
-  dominica: "Dominica",
-  project: "Project",
-  other: "Other",
+/** A member's own contribution, as read from `ledger_live`. */
+type MemberEntry = {
+  id: number;
+  amount: string; // NUMERIC arrives as a string; it is never parsed to a float
+  category: string | null;
+  project_id: number | null;
+  project_name: string | null;
+  date: string;
+  notes: string | null;
+  method: string;
 };
 
-function ksh(amount: number): string {
-  return `Ksh ${amount.toLocaleString("en-KE", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+/**
+ * Format a NUMERIC-as-string without going through a float. Summing or
+ * re-parsing money in JavaScript is what made a member's total drift a cent
+ * away from the admin's; the total below is computed by Postgres and formatted
+ * here as text.
+ */
+function ksh(amount: string): string {
+  const [whole, fraction = "0"] = amount.split(".");
+  const negative = whole.startsWith("-");
+  const digits = negative ? whole.slice(1) : whole;
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `Ksh ${negative ? "-" : ""}${grouped}.${fraction.padEnd(2, "0").slice(0, 2)}`;
 }
 
 function formatDate(iso: string): string {
@@ -36,16 +48,25 @@ export default async function DashboardPage() {
   if (!user) redirect("/portal");
   if (user.must_change_password) redirect("/portal/change-password");
 
-  const { rows } = await sql<ContributionRow & { project_name: string | null }>`
-    SELECT c.id, c.user_id, c.amount, c.type, c.project_id, c.date,
-           c.recorded_by, c.notes, c.created_at, p.name AS project_name
-    FROM contributions c
-    LEFT JOIN projects p ON p.id = c.project_id
-    WHERE c.user_id = ${user.id}
-    ORDER BY c.date DESC, c.id DESC
-  `;
+  // Members see their own contributions only — never group spending, which
+  // belongs on a group statement rather than a page that reads as "your money".
+  const [{ rows }, { rows: totals }] = await Promise.all([
+    sql<MemberEntry>`
+      SELECT l.id, l.amount::text AS amount, l.category, l.project_id, l.date::text AS date,
+             l.notes, l.method, p.name AS project_name
+      FROM ledger_live l
+      LEFT JOIN projects p ON p.id = l.project_id
+      WHERE l.user_id = ${user.id} AND l.kind = 'contribution'
+      ORDER BY l.date DESC, l.id DESC
+    `,
+    sql<{ total: string }>`
+      SELECT total::text AS total FROM member_totals WHERE id = ${user.id}
+    `,
+  ]);
 
-  const total = rows.reduce((sum, r) => sum + Number(r.amount), 0);
+  // Summed by Postgres over NUMERIC, and kept as a string all the way to the
+  // screen, so it always agrees with the figure the admin sees.
+  const total = totals[0]?.total ?? "0";
 
   return (
     <main className="px-6 py-16 md:py-24">
@@ -112,7 +133,7 @@ export default async function DashboardPage() {
                       <SunMark className="mt-1.5 shrink-0" />
                       <div>
                         <p className="font-body text-sm font-medium text-ink">
-                          {r.project_name ?? TYPE_LABELS[r.type]}
+                          {r.project_name ?? r.category ?? "Other"}
                         </p>
                         <p className="font-mono text-xs text-ink/50">
                           {formatDate(r.date)}
@@ -125,7 +146,7 @@ export default async function DashboardPage() {
                       </div>
                     </div>
                     <p className="shrink-0 font-mono text-sm text-ink">
-                      {ksh(Number(r.amount))}
+                      {ksh(r.amount)}
                     </p>
                   </li>
                 ))}

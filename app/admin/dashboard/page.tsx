@@ -2,36 +2,54 @@ import { redirect } from "next/navigation";
 import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine } from "@/components/Horizon";
 import AdminNav from "@/components/AdminNav";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialRedirect } from "@/lib/auth";
 import { sql } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 function ksh(amount: number): string {
   return `Ksh ${amount.toLocaleString("en-KE", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   })}`;
 }
 
 export default async function AdminDashboardPage() {
   noStore();
-  const admin = await requireAdmin();
-  if (!admin) redirect("/admin/login");
+  const check = await checkAdmin();
+  // An admin still on a temporary password goes to set a real one rather than
+  // being bounced to a login page they are already past.
+  if (!check.ok) redirect(adminDenialRedirect(check));
+  const admin = check.user;
 
-  const [members, raised, thisMonth, goalRow] = await Promise.all([
+  const [members, position, thisMonth, goalRow] = await Promise.all([
     sql`SELECT COUNT(*)::int AS count FROM users WHERE active = true AND role = 'member'`,
-    sql`SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM contributions`,
-    sql`SELECT COALESCE(SUM(amount), 0)::float8 AS total, COUNT(*)::int AS count
-        FROM contributions WHERE date >= date_trunc('month', CURRENT_DATE)`,
+    sql`SELECT total_raised::float8 AS raised,
+               total_spent::float8  AS spent,
+               balance::float8      AS balance
+        FROM fund_position`,
+    // "This month" has to be a Nairobi month. The server runs in UTC, so a bare
+    // CURRENT_DATE rolls over at 03:00 EAT — on the 1st, the dashboard would
+    // show the previous month's figures for the first three hours of the day.
+    sql`SELECT
+          COALESCE(SUM(amount) FILTER (WHERE kind = 'contribution'), 0)::float8 AS in_total,
+          COALESCE(SUM(amount) FILTER (WHERE kind = 'expenditure'),  0)::float8 AS out_total,
+          COUNT(*)::int AS count
+        FROM ledger_live
+        WHERE date >= date_trunc('month', (now() AT TIME ZONE 'Africa/Nairobi')::date)`,
     sql`SELECT value FROM settings WHERE key = 'funds_goal'`,
   ]);
 
   const memberCount = members.rows[0]?.count ?? 0;
-  const totalRaised = raised.rows[0]?.total ?? 0;
-  const monthTotal = thisMonth.rows[0]?.total ?? 0;
+  const totalRaised = position.rows[0]?.raised ?? 0;
+  const totalSpent = position.rows[0]?.spent ?? 0;
+  const balance = position.rows[0]?.balance ?? 0;
+  const monthIn = thisMonth.rows[0]?.in_total ?? 0;
+  const monthOut = thisMonth.rows[0]?.out_total ?? 0;
   const monthCount = thisMonth.rows[0]?.count ?? 0;
   const goal = Number(goalRow.rows[0]?.value ?? 0);
+  // The goal percentage measures fundraising progress, so it stays gross.
+  // Cash on hand is a different question, answered by the balance card.
   const percent = goal > 0 ? Math.min(100, Math.round((totalRaised / goal) * 100)) : 0;
 
   return (
@@ -68,6 +86,25 @@ export default async function AdminDashboardPage() {
             </div>
           </div>
 
+          {/* Balance — cash on hand. The number the group cares about most. */}
+          <div className="rounded-4xl border border-ink/10 bg-card p-8">
+            <p className="font-mono text-xs uppercase tracking-[0.3em] text-sage">
+              Balance
+            </p>
+            <p className="mt-4 font-mono text-4xl text-ink">{ksh(balance)}</p>
+            <p className="mt-2 font-body text-sm text-ink/60">
+              {ksh(totalRaised)} in, {ksh(totalSpent)} out
+            </p>
+          </div>
+
+          {/* Spent */}
+          <div className="rounded-4xl border border-ink/10 bg-card p-8">
+            <p className="font-mono text-xs uppercase tracking-[0.3em] text-sage">
+              Total spent
+            </p>
+            <p className="mt-4 font-mono text-4xl text-ink">{ksh(totalSpent)}</p>
+          </div>
+
           {/* Members */}
           <div className="rounded-4xl border border-ink/10 bg-card p-8">
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-sage">
@@ -79,9 +116,14 @@ export default async function AdminDashboardPage() {
           {/* This month */}
           <div className="rounded-4xl border border-ink/10 bg-card p-8">
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-sage">
-              Contributions this month
+              This month
             </p>
-            <p className="mt-4 font-mono text-4xl text-ink">{ksh(monthTotal)}</p>
+            <div className="mt-4 flex flex-wrap items-baseline gap-x-8 gap-y-2">
+              <p className="font-mono text-4xl text-ink">{ksh(monthIn)}</p>
+              <p className="font-body text-sm text-ink/60">in</p>
+              <p className="font-mono text-4xl text-ink">{ksh(monthOut)}</p>
+              <p className="font-body text-sm text-ink/60">out</p>
+            </div>
             <p className="mt-2 font-body text-sm text-ink/60">
               across {monthCount} {monthCount === 1 ? "entry" : "entries"}
             </p>

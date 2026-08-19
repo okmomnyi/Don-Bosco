@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 
 /**
@@ -6,7 +7,11 @@ import bcrypt from "bcryptjs";
  * app. `lib/auth.ts` re-exports these for use inside the Next runtime.
  */
 
-const SALT_ROUNDS = 10;
+// bcrypt cost. 12 is roughly 4x the work of 10 — a few hundred milliseconds per
+// hash, which is fine for a login form and meaningfully slower to brute-force.
+// Note: bcrypt silently truncates the input at 72 bytes, so anything past that
+// contributes nothing to the hash.
+const SALT_ROUNDS = 12;
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, SALT_ROUNDS);
@@ -45,8 +50,28 @@ export function normalizePhone(input: string): string | null {
   return `+254${digits}`;
 }
 
-/** A readable temporary password, e.g. "youth-4827". */
+/**
+ * Alphabet for temporary passwords: lowercase letters and digits with the
+ * ambiguous characters removed (no l/1, no o/0), so a temp password can be read
+ * aloud over the phone without confusion. Exactly 32 characters, which divides
+ * 256 evenly — `byte % 32` is therefore uniform, with no modulo bias.
+ */
+const TEMP_PASSWORD_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
+const TEMP_PASSWORD_LENGTH = 10;
+
+/**
+ * A readable but unguessable temporary password, e.g. "youth-k7m2qp9x4e".
+ *
+ * The old version was `youth-` plus four `Math.random()` digits: a 9,000-value
+ * keyspace from a non-cryptographic PRNG whose internal state can be recovered
+ * from a handful of observed outputs. This uses `randomBytes` over a 32-symbol
+ * alphabet, which is 32^10 (about 2^50) possibilities.
+ */
 export function generateTempPassword(): string {
-  const n = Math.floor(1000 + Math.random() * 9000);
-  return `youth-${n}`;
+  const bytes = randomBytes(TEMP_PASSWORD_LENGTH);
+  let out = "";
+  for (const b of bytes) {
+    out += TEMP_PASSWORD_ALPHABET[b % TEMP_PASSWORD_ALPHABET.length];
+  }
+  return `youth-${out}`;
 }

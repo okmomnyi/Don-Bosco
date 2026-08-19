@@ -1,22 +1,18 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialResponse } from "@/lib/auth";
 
 export async function GET() {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   const { rows } = await sql`SELECT value FROM settings WHERE key = 'funds_goal'`;
   return NextResponse.json({ fundsGoal: rows[0]?.value ?? "0" });
 }
 
 export async function PATCH(req: Request) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   let body: { fundsGoal?: number | string };
   try {
@@ -25,7 +21,8 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  const goal = Number(body.fundsGoal);
+  // `Number(null)` is 0, so an explicit null would silently zero the goal.
+  const goal = body.fundsGoal == null ? NaN : Number(body.fundsGoal);
   if (!Number.isFinite(goal) || goal < 0) {
     return NextResponse.json(
       { error: "Goal must be zero or a positive number." },

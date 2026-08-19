@@ -2,16 +2,23 @@ import { redirect } from "next/navigation";
 import { HorizonLine } from "@/components/Horizon";
 import AdminNav from "@/components/AdminNav";
 import ContributionsManager from "@/components/ContributionsManager";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialRedirect } from "@/lib/auth";
+import { todayInNairobi } from "@/lib/ledger";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminContributionsPage() {
-  const admin = await requireAdmin();
-  if (!admin) redirect("/admin/login");
+  const check = await checkAdmin();
+  // An admin still on a temporary password goes to set a real one rather than
+  // being bounced to a login page they are already past.
+  if (!check.ok) redirect(adminDenialRedirect(check));
+  const admin = check.user;
 
-  // Default the date picker to today (server time).
-  const today = new Date().toISOString().slice(0, 10);
+  // Default the date picker to today in Nairobi, not in UTC. The server runs
+  // in UTC, so between midnight and 03:00 EAT `toISOString()` returned
+  // yesterday — a treasurer entering Sunday's collection late at night filed
+  // it under Saturday.
+  const today = todayInNairobi();
 
   return (
     <main className="px-6 py-12 md:py-16">

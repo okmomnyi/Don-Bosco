@@ -2,13 +2,16 @@ import { redirect } from "next/navigation";
 import { HorizonLine } from "@/components/Horizon";
 import AdminNav from "@/components/AdminNav";
 import MembersManager from "@/components/MembersManager";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialRedirect } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminMembersPage() {
-  const admin = await requireAdmin();
-  if (!admin) redirect("/admin/login");
+  const check = await checkAdmin();
+  // An admin still on a temporary password goes to set a real one rather than
+  // being bounced to a login page they are already past.
+  if (!check.ok) redirect(adminDenialRedirect(check));
+  const admin = check.user;
 
   return (
     <main className="px-6 py-12 md:py-16">

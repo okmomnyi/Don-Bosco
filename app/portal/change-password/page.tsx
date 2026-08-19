@@ -30,7 +30,10 @@ export default async function ChangePasswordPage() {
       </div>
 
       <div className="mx-auto mt-10 max-w-md rounded-4xl border border-ink/10 bg-card p-8">
-        <ChangePasswordForm redirectTo={redirectTo} />
+        <ChangePasswordForm
+          redirectTo={redirectTo}
+          requireCurrent={!user.must_change_password}
+        />
       </div>
     </main>
   );

@@ -12,42 +12,74 @@ const sources = [
   "Any profitable venture undertaken by the group.",
 ];
 
+type FundPosition = {
+  raised: number;
+  spent: number;
+  balance: number;
+  goal: number;
+  percent: number;
+};
+
+const EMPTY_POSITION: FundPosition = {
+  raised: 0,
+  spent: 0,
+  balance: 0,
+  goal: 0,
+  percent: 0,
+};
+
 /**
- * Live progress: SUM(contributions.amount) / settings.funds_goal * 100.
- * Falls back to 0% if the database isn't reachable or not yet seeded, so the
- * page always renders (e.g. during local dev before `npm run db:init`).
+ * The group's position, read from the `fund_position` view.
+ *
+ * The percentage stays gross — raised against the goal — because it measures
+ * fundraising progress, not cash on hand. Balance answers the other question
+ * and is shown as its own figure.
+ *
+ * Falls back to zeroes if the database isn't reachable or not yet seeded, so
+ * the page always renders (e.g. during local dev before `npm run db:init`).
  */
-async function getFundsRaisedPercent(): Promise<number> {
+async function getFundPosition(): Promise<FundPosition> {
   noStore();
   try {
-    const [raised, goalRow] = await Promise.all([
-      sql`SELECT COALESCE(SUM(amount), 0)::float8 AS total FROM contributions`,
+    const [pos, goalRow] = await Promise.all([
+      sql`SELECT total_raised::float8 AS raised,
+                 total_spent::float8  AS spent,
+                 balance::float8      AS balance
+          FROM fund_position`,
       sql`SELECT value FROM settings WHERE key = 'funds_goal'`,
     ]);
-    const total = Number(raised.rows[0]?.total ?? 0);
+    const raised = Number(pos.rows[0]?.raised ?? 0);
+    const spent = Number(pos.rows[0]?.spent ?? 0);
+    const balance = Number(pos.rows[0]?.balance ?? 0);
     const goal = Number(goalRow.rows[0]?.value ?? 0);
-    if (goal <= 0) return 0;
-    return Math.min(100, Math.round((total / goal) * 100));
+    const percent = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
+    return { raised, spent, balance, goal, percent };
   } catch {
-    return 0;
+    return EMPTY_POSITION;
   }
 }
 
 type ProjectProgress = { id: number; name: string; raised: number; target: number };
 
-/** Active projects with how much each has raised, for the per-project bars. */
+/**
+ * Active projects with how much each has raised, for the per-project bars.
+ *
+ * `raised` is contributions only, so a bar never runs backwards when the group
+ * spends what it raised. This page deliberately does not publish the itemised
+ * expenditure list — it is public and indexed, and naming payees and amounts
+ * exposes suppliers and invites outsiders to second-guess individual
+ * purchases. The itemised statement lives behind the admin portal.
+ */
 async function getProjectProgress(): Promise<ProjectProgress[]> {
   noStore();
   try {
     const { rows } = await sql`
-      SELECT p.id, p.name,
-             COALESCE(SUM(c.amount), 0)::float8 AS raised,
-             p.target_amount::float8 AS target
-      FROM projects p
-      LEFT JOIN contributions c ON c.project_id = p.id
-      WHERE p.active = true
-      GROUP BY p.id
-      ORDER BY p.name ASC
+      SELECT id, name,
+             raised::float8 AS raised,
+             target_amount::float8 AS target
+      FROM project_totals
+      WHERE active = true
+      ORDER BY name ASC
     `;
     return rows.map((r) => ({
       id: r.id as number,
@@ -65,10 +97,11 @@ function ksh(amount: number): string {
 }
 
 export default async function FundsFinancePage() {
-  const [FUNDS_RAISED_PERCENT, projects] = await Promise.all([
-    getFundsRaisedPercent(),
+  const [position, projects] = await Promise.all([
+    getFundPosition(),
     getProjectProgress(),
   ]);
+  const FUNDS_RAISED_PERCENT = position.percent;
 
   return (
     <main className="px-6 py-16 md:py-24">
@@ -104,6 +137,35 @@ export default async function FundsFinancePage() {
               <span>0%</span>
               <span>100%</span>
             </div>
+
+            {/* Raised, spent and balance as three figures. Percentage above is
+                fundraising progress; balance is what the group actually holds. */}
+            <dl className="mt-8 grid grid-cols-3 gap-4 border-t border-cream/10 pt-6">
+              <div>
+                <dt className="font-mono text-xs uppercase tracking-[0.2em] text-cream/50">
+                  Raised
+                </dt>
+                <dd className="mt-2 font-mono text-lg text-cream">
+                  {ksh(position.raised)}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-mono text-xs uppercase tracking-[0.2em] text-cream/50">
+                  Spent
+                </dt>
+                <dd className="mt-2 font-mono text-lg text-cream">
+                  {ksh(position.spent)}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-mono text-xs uppercase tracking-[0.2em] text-cream/50">
+                  Balance
+                </dt>
+                <dd className="mt-2 font-mono text-lg text-gold">
+                  {ksh(position.balance)}
+                </dd>
+              </div>
+            </dl>
 
             <Link
               href="/portal"

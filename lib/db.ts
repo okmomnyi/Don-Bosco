@@ -24,6 +24,10 @@ export type UserRow = {
   must_change_password: boolean;
   active: boolean;
   created_at: string;
+  /** Bumped to revoke every session already issued for this user. */
+  token_version: number;
+  /** When the issued temporary password stops working. NULL means no expiry. */
+  temp_password_expires_at: string | null;
 };
 
 /** Shape of a row in the `contributions` table. */

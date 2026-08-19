@@ -1,35 +1,33 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { checkAdmin, adminDenialResponse } from "@/lib/auth";
 
 export async function GET() {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
-  // Each project with how much has been raised against it.
+  // Read the view rather than re-deriving the arithmetic here. `raised` counts
+  // contributions only, so a project's progress bar never goes backwards when
+  // the group spends the money it raised; `spent` and `net` are separate.
   const { rows } = await sql`
     SELECT
-      p.id,
-      p.name,
-      p.target_amount::text AS target_amount,
-      p.active,
-      COALESCE(SUM(c.amount), 0)::text AS raised
-    FROM projects p
-    LEFT JOIN contributions c ON c.project_id = p.id
-    GROUP BY p.id
-    ORDER BY p.active DESC, p.name ASC
+      id,
+      name,
+      target_amount::text AS target_amount,
+      active,
+      raised::text AS raised,
+      spent::text  AS spent,
+      net::text    AS net
+    FROM project_totals
+    ORDER BY active DESC, name ASC
   `;
 
   return NextResponse.json({ projects: rows });
 }
 
 export async function POST(req: Request) {
-  const admin = await requireAdmin();
-  if (!admin) {
-    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-  }
+  const check = await checkAdmin();
+  if (!check.ok) return adminDenialResponse(check);
 
   let body: { name?: string; target?: number | string };
   try {
