@@ -1,4 +1,6 @@
 import Link from "next/link";
+import ParishLink from "@/components/ParishLink";
+import { PARISH } from "@/lib/site";
 import { HorizonLine, HorizonScene } from "@/components/Horizon";
 
 import type { Metadata } from "next";
@@ -36,6 +38,13 @@ export default function HomePage() {
             Welcome to the Senior Youth of Don Bosco, Changamwe Parish — a
             community of young, unmarried men and women aged 18 to 25,
             walking together in faith.
+          </p>
+          <p className="mx-auto mt-4 max-w-2xl font-body text-sm text-ink/60">
+            We are the senior youth of{" "}
+            <ParishLink className="font-medium text-ink underline decoration-coral/50 underline-offset-4 transition-colors hover:decoration-coral focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral">
+              {PARISH.name}
+            </ParishLink>
+            .
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <Link

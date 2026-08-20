@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { HorizonLine } from "./Horizon";
+import ParishLink from "./ParishLink";
+import { PARISH, ARCHDIOCESE } from "@/lib/site";
 
 const links = [
   { href: "/values-membership", label: "Values & Membership" },
@@ -19,6 +21,13 @@ export default function Footer() {
             <p className="mt-3 max-w-xs font-body text-sm text-cream/70">
               A community of young, unmarried men and women aged 18–25,
               walking together in faith at Don Bosco, Changamwe Parish.
+            </p>
+            <p className="mt-4 max-w-xs font-body text-sm text-cream/70">
+              Part of{" "}
+              <ParishLink className="font-medium text-gold underline decoration-gold/40 underline-offset-4 transition-colors hover:decoration-gold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold">
+                {PARISH.name}
+              </ParishLink>
+              , in the {ARCHDIOCESE.name}.
             </p>
           </div>
 
@@ -60,6 +69,7 @@ export default function Footer() {
             <Link href="/terms" className="hover:text-cream">
               Terms
             </Link>
+            <ParishLink className="hover:text-cream">Parish website</ParishLink>
           </div>
         </div>
       </div>
