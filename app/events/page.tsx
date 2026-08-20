@@ -7,6 +7,22 @@ import {
   SeminarIcon,
 } from "@/components/icons";
 
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Events",
+  description:
+    "Opening and closing Mass, weekly Wednesday fellowship at Changamwe Catholic Church, the 1st May games day, festivals and seminars through the youth year.",
+  alternates: { canonical: "/events" },
+  openGraph: {
+    title: "Events",
+    description:
+      "Opening and closing Mass, weekly Wednesday fellowship at Changamwe Catholic Church, the 1st May games day, festivals and seminars through the youth year.",
+    url: "/events",
+    type: "website",
+  },
+};
+
 const events = [
   {
     icon: MassIcon,

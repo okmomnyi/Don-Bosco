@@ -1,9 +1,10 @@
 import { HorizonLine } from "@/components/Horizon";
 
 export const metadata = {
-  title: "Terms of Use — St. Mary's Senior Youth",
+  title: "Terms of Use",
   description:
     "The terms for using the St. Mary's Senior Youth member portal and website.",
+  alternates: { canonical: "/terms" },
 };
 
 const sections = [

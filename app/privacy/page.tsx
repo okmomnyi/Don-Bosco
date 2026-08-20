@@ -1,9 +1,10 @@
 import { HorizonLine } from "@/components/Horizon";
 
 export const metadata = {
-  title: "Privacy Policy — St. Mary's Senior Youth",
+  title: "Privacy Policy",
   description:
     "How St. Mary's Senior Youth collects, uses and protects member information.",
+  alternates: { canonical: "/privacy" },
 };
 
 const sections = [

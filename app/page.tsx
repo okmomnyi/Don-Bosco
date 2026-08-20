@@ -1,6 +1,24 @@
 import Link from "next/link";
 import { HorizonLine, HorizonScene } from "@/components/Horizon";
 
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: {
+    absolute: "St. Mary's Senior Youth — Changamwe",
+  },
+  description:
+    "The senior youth group of St. Mary's Catholic Church, Changamwe. Membership and values, events through the year, how the group is funded, and the member portal.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "St. Mary's Senior Youth — Changamwe",
+    description:
+      "The senior youth group of St. Mary's Catholic Church, Changamwe. Membership and values, events through the year, how the group is funded, and the member portal.",
+    url: "/",
+    type: "website",
+  },
+};
+
 export default function HomePage() {
   return (
     <main>

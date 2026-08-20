@@ -1,5 +1,21 @@
 import { HorizonLine, SunMark } from "@/components/Horizon";
 
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Values & Membership",
+  description:
+    "What it means to belong: registration, the 9-day Novena, the CSY constitution and manual, members' rights, the values the group holds, and how membership ends.",
+  alternates: { canonical: "/values-membership" },
+  openGraph: {
+    title: "Values & Membership",
+    description:
+      "What it means to belong: registration, the 9-day Novena, the CSY constitution and manual, members' rights, the values the group holds, and how membership ends.",
+    url: "/values-membership",
+    type: "website",
+  },
+};
+
 const requirements = [
   "Pay a registration fee of Ksh 100, renewed annually on 30th January.",
   "Complete a 9-day Novena as part of being commissioned into full membership.",

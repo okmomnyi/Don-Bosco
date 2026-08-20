@@ -6,6 +6,15 @@ import SignOutButton from "@/components/SignOutButton";
 import { getCurrentUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
 
+import type { Metadata } from "next";
+
+// Members' names, phone numbers and contribution figures. Never indexed:
+// robots.txt is a request, a robots meta tag is honoured even when the
+// URL is reached from a link somewhere else.
+export const metadata: Metadata = {
+  robots: { index: false, follow: false, nocache: true },
+};
+
 export const dynamic = "force-dynamic";
 
 /** A member's own contribution, as read from `ledger_live`. */

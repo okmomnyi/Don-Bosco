@@ -68,6 +68,7 @@ Copy `.env.example` to `.env.local` and fill in:
 | `FUNDS_GOAL`   | (Optional) Target amount in Ksh, used only to seed `funds_goal`.  |
 | `NEXT_PUBLIC_SITE_URL` | (Optional) Canonical public URL, used for `metadataBase`, the sitemap and robots. Defaults to the current Vercel deployment; set it once the group has its own domain, or link previews and the sitemap will point at the old address. |
 | `CI`           | (Optional) Set to `true` only in automation, to let `create-admin` take the password as an argument instead of prompting. |
+| `NEXT_PUBLIC_SITE_URL` | (Optional) The site's canonical public URL, used for canonical links, the sitemap, robots.txt and the OG image. Defaults to the current Vercel deployment. **Set this the moment the group moves onto a real domain** (e.g. a `stmaryschangamwe.org` subdomain) — a canonical pointing at an address that no longer serves the site removes it from search results. |
 
 Generate a secret:
 
@@ -125,6 +126,28 @@ been checked against it and nobody has needed to look back:
 -- only after a week of the ledger running correctly
 DROP TABLE contributions_legacy;
 ```
+
+## Search and sharing
+
+Public pages carry their own title, description and canonical URL; everything
+behind a sign-in sends `robots: noindex` **and** redirects unauthenticated
+visitors, so members' names and figures cannot be indexed.
+
+`lib/site.ts` holds the facts about the group and the parish in one place, and
+builds the schema.org JSON-LD from them: the group is an `Organization` whose
+`parentOrganization` is `St. Mary's Catholic Church Changamwe`, whose parent in
+turn is the `Roman Catholic Archdiocese of Mombasa`. That chain is what lets a
+search engine connect this site to the parish rather than to any other
+St. Mary's.
+
+The parish details (address, coordinates, the archdiocese) were taken from
+stmaryschangamwe.org, the parish's own site. **Nothing in that file is
+invented** — structured data is presented to users as fact, so a guessed
+address or phone number is worse than none. The parish's phone and email are
+deliberately not duplicated here: the parish site is the authority for them.
+
+Update `CONTENT_LAST_UPDATED` in `app/sitemap.ts` when page copy actually
+changes.
 
 ## How sign-in works
 

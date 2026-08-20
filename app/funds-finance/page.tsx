@@ -3,6 +3,22 @@ import { unstable_noStore as noStore } from "next/cache";
 import { HorizonLine, SunMark } from "@/components/Horizon";
 import { sql } from "@/lib/db";
 
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Funds & Finance",
+  description:
+    "How the group is funded and where the money goes. Live totals raised, spent and held, with progress on each project the group is raising for.",
+  alternates: { canonical: "/funds-finance" },
+  openGraph: {
+    title: "Funds & Finance",
+    description:
+      "How the group is funded and where the money goes. Live totals raised, spent and held, with progress on each project the group is raising for.",
+    url: "/funds-finance",
+    type: "website",
+  },
+};
+
 export const dynamic = "force-dynamic";
 
 const sources = [
